@@ -22,7 +22,7 @@ Tech Stack
     * Status LEDs
 
 Circuit Diagram
-`[/circuit_diagram.png]`
+`[https://github.com/eemreinceer/ESP32-Smart-Safe-System/blob/main/circuit_diagram.png?raw=true]`
 
 Finite State Machine (FSM)
 
