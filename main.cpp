@@ -3,9 +3,10 @@
 #include <LiquidCrystal_I2C.h>
 #include <Keypad.h>
 #include <ESP32Servo.h>
+#include <Preferences.h> // <--- YENİ: Kalıcı hafıza kütüphanesi
 
 // ============================================================
-// 1. CONFIG & CONSTANTS (Magic Numbers Yok Edildi)
+// 1. CONFIG & CONSTANTS
 // ============================================================
 
 // Pin Tanımları
@@ -30,13 +31,12 @@ const byte PIN_COL_4 = 2;
 #define ANGLE_LOCKED    0
 #define ANGLE_OPEN      90
 
-// Zamanlama Ayarları (Milisaniye cinsinden)
-#define TIME_DOOR_OPEN  3000UL  // Kapı 3 saniye açık kalsın (UL: Unsigned Long)
-#define TIME_ERROR_SHOW 2000UL  // Hata mesajı 2 saniye dursun
-#define BLINK_INTERVAL  200UL   // Kırmızı LED 200ms aralıkla yanıp sönsün
+// Zamanlama Ayarları
+#define TIME_DOOR_OPEN  3000UL
+#define TIME_ERROR_SHOW 2000UL
+#define BLINK_INTERVAL  200UL
 
-// Şifre
-const String MASTER_PASS = "1234";
+// Şifre Ayarları
 const int PASS_LEN = 4;
 
 // ============================================================
@@ -46,6 +46,7 @@ const int PASS_LEN = 4;
 // Donanım Nesneleri
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 Servo kapiServosu;
+Preferences preferences; // <--- YENİ: Hafıza nesnesi
 
 // Keypad Ayarları
 const byte ROWS = 4;
@@ -62,28 +63,29 @@ Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
 // Durum Yönetimi (State Machine)
 enum SystemState {
-  STATE_LOCKED,     // Bekleme modu
-  STATE_OPEN,       // Kapı açık
-  STATE_ERROR       // Yanlış şifre modu
+  STATE_LOCKED,
+  STATE_OPEN,
+  STATE_ERROR
 };
 
 SystemState currentState = STATE_LOCKED;
 
 // Global Değişkenler
 String inputBuffer = "";
-unsigned long stateStartTime = 0;    // Durumun başladığı an
-unsigned long lastBlinkTime = 0;     // LED yanıp sönme zamanlayıcısı
-bool ledState = false;               // Yanıp sönme durumu için
+String currentPassword;      // <--- YENİ: Değiştirilebilir şifre değişkeni
+unsigned long stateStartTime = 0;
+unsigned long lastBlinkTime = 0;
+bool ledState = false;
 
 // ============================================================
-// 3. FONKSİYON PROTOTİPLERİ (Forward Declaration)
+// 3. FONKSİYON PROTOTİPLERİ
 // ============================================================
 void checkKeypad();
 void processPassword();
 void unlockDoor();
 void lockDoor();
 void triggerError();
-void updateSystemState(); // Zamanlayıcıları ve durum geçişlerini yönetir
+void updateSystemState();
 void displayMessage(String line1, String line2);
 
 // ============================================================
@@ -104,18 +106,33 @@ void setup() {
   lcd.init();
   lcd.backlight();
 
+  // --- YENİ: HAFIZA İŞLEMLERİ ---
+  // "safe-app" namespace'ini açıyoruz. false = okuma/yazma modu.
+  preferences.begin("safe-app", false); 
+  
+  // Hafızada "pass" anahtarı var mı kontrol et, yoksa "" döner.
+  String savedPass = preferences.getString("pass", ""); 
+  
+  if (savedPass == "") {
+    Serial.println("Hafizada sifre yok, varsayilan ataniyor...");
+    currentPassword = "1234";             // Varsayılan fabrika şifresi
+    preferences.putString("pass", currentPassword); // Hafızaya kaydet
+  } else {
+    Serial.println("Kayitli sifre hafizadan yuklendi.");
+    currentPassword = savedPass;          // Hafızadaki şifreyi al
+  }
+  
+  Serial.println("Gecerli Sifre: " + currentPassword); // Debug için (Güvenlikte kaldırılır)
+
   // Sistemi kilitli başlat
   lockDoor();
 }
 
 // ============================================================
-// 5. LOOP (Tertemiz!)
+// 5. LOOP
 // ============================================================
 void loop() {
-  // 1. Tuş takımını dinle
   checkKeypad();
-
-  // 2. Sistemin o anki durumuna göre zamanlayıcıları yönet
   updateSystemState();
 }
 
@@ -124,22 +141,19 @@ void loop() {
 // ============================================================
 
 void checkKeypad() {
-  // Eğer sistem şu an meşgulse (Kapı açıksa veya Hata veriyorsa) tuş okuma
   if (currentState != STATE_LOCKED) return;
 
   char key = keypad.getKey();
 
   if (key) {
-    Serial.println(key); // Debug için
-
     // Şifre tamponuna ekle
     inputBuffer += key;
 
     // Ekrana yıldız bas
-    lcd.setCursor(inputBuffer.length(), 1); // "LOCKED" yazısının altına değil, yanına
+    lcd.setCursor(inputBuffer.length(), 1); 
     lcd.print("*");
 
-    // Şifre tamamlandı mı?
+    // Şifre uzunluğu tamamlandı mı?
     if (inputBuffer.length() == PASS_LEN) {
       processPassword();
     }
@@ -147,18 +161,18 @@ void checkKeypad() {
 }
 
 void processPassword() {
-  if (inputBuffer == MASTER_PASS) {
+  // <--- GÜNCELLEME: Artık sabit değil, değişkene bakıyor
+  if (inputBuffer == currentPassword) {
     unlockDoor();
   } else {
     triggerError();
   }
-  // Tamponu temizle
   inputBuffer = "";
 }
 
 void unlockDoor() {
   currentState = STATE_OPEN;
-  stateStartTime = millis(); // Kronometreyi başlat
+  stateStartTime = millis();
 
   kapiServosu.write(ANGLE_OPEN);
   digitalWrite(PIN_LED_GREEN, HIGH);
@@ -169,8 +183,8 @@ void unlockDoor() {
 
 void triggerError() {
   currentState = STATE_ERROR;
-  stateStartTime = millis(); // Hata süresi kronometresi
-  lastBlinkTime = millis();  // Blink kronometresi
+  stateStartTime = millis();
+  lastBlinkTime = millis();
 
   displayMessage("ACCESS DENIED", "  WRONG PASS");
 }
@@ -184,43 +198,36 @@ void lockDoor() {
   
   displayMessage("SYSTEM LOCKED", "Pass: ");
   
-  inputBuffer = ""; // Güvenlik için buffer'ı temizle
+  inputBuffer = "";
 }
 
-// Bu fonksiyon loop içinde sürekli döner ve süresi dolan işlemleri bitirir
 void updateSystemState() {
   unsigned long currentMillis = millis();
 
   switch (currentState) {
-    
     case STATE_OPEN:
-      // Kapı açık kalma süresi doldu mu?
       if (currentMillis - stateStartTime >= TIME_DOOR_OPEN) {
         lockDoor();
       }
       break;
 
     case STATE_ERROR:
-      // 1. LED Yanıp Sönme (Blink Without Delay)
-      if (currentMillis - lastBlinkTime >= BLINK_INTERVAL) {
-        lastBlinkTime = currentMillis; // Zamanı güncelle
-        ledState = !ledState;          // Durumu tersine çevir
-        digitalWrite(PIN_LED_RED, ledState);
-      }
-
-      // 2. Hata gösterme süresi doldu mu?
       if (currentMillis - stateStartTime >= TIME_ERROR_SHOW) {
         lockDoor();
+      }
+      // LED Yanıp Sönme (Non-blocking)
+      if (currentMillis - lastBlinkTime >= BLINK_INTERVAL) {
+        lastBlinkTime = currentMillis;
+        ledState = !ledState;
+        digitalWrite(PIN_LED_RED, ledState);
       }
       break;
 
     case STATE_LOCKED:
-      // Kilitliyken özel bir zamanlayıcıya ihtiyacımız yok
       break;
   }
 }
 
-// LCD Mesajlarını tek merkezden yönetmek için yardımcı fonksiyon
 void displayMessage(String line1, String line2) {
   lcd.clear();
   lcd.setCursor(0, 0);
